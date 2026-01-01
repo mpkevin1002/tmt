@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>路徑描繪測驗 (TMT) 認知訓練 - 專業版</title>
+    <title>路徑描繪測驗 (TMT) 認知訓練 - 專業教學版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
@@ -22,7 +22,8 @@
             nodePositions: [],
             targetPath: [],
             scores: [],
-            isPlaying: false
+            isPlaying: false,
+            isTrial: false
         };
 
         const sequences = {
@@ -31,13 +32,12 @@
             stem: ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
         };
 
-        // 進階模式使用的干擾顏色
         const advancedColors = [
             '#FEE2E2', '#FEF3C7', '#D1FAE5', '#DBEAFE', '#E0E7FF', '#EDE9FE', '#FCE7F3', '#FFEDD5'
         ];
 
         let db, auth;
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'tmt-clean-v2';
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'tmt-pro-v6';
 
         const setupFirebase = async () => {
             try {
@@ -70,6 +70,9 @@
         setupFirebase();
 
         async function saveScore(time, errors, mode, difficulty) {
+            // 試玩紀錄不儲存
+            if (window.gameState.isTrial) return;
+
             const scoreData = {
                 time: parseFloat(time),
                 errors: errors,
@@ -78,7 +81,6 @@
                 timestamp: Date.now()
             };
             
-            // 存入記憶體
             window.gameState.scores.push(scoreData);
             updateHistoryUI();
 
@@ -95,35 +97,50 @@
             onSnapshot(q, (snapshot) => {
                 window.gameState.scores = snapshot.docs.map(doc => doc.data());
                 updateHistoryUI();
+                // 如果已有成績，隱藏新手建議
+                if (window.gameState.scores.length > 0) {
+                    const tip = document.getElementById('trial-tip');
+                    if (tip) tip.classList.add('hidden');
+                }
             });
         }
 
         // --- 遊戲邏輯 ---
 
-        window.startGame = (mode, difficulty = 'basic') => {
+        window.startGame = (mode, difficulty = 'basic', isTrial = false) => {
             window.gameState.mode = mode;
             window.gameState.difficulty = difficulty;
             window.gameState.isPlaying = true;
+            window.gameState.isTrial = isTrial;
+            
             document.getElementById('start-screen').classList.add('hidden');
             document.getElementById('result-screen').classList.add('hidden');
             document.getElementById('quit-btn').classList.remove('hidden');
             
-            const seqB = sequences[mode];
-            const length = 12; 
-            const slicedB = seqB.slice(0, length);
-            const seqA = Array.from({length: length}, (_, i) => (i + 1).toString());
-            
-            window.gameState.targetPath = [];
-            for(let i = 0; i < length; i++) {
-                window.gameState.targetPath.push(seqA[i]);
-                window.gameState.targetPath.push(slicedB[i]);
+            if (isTrial) {
+                // 試玩模式固定 1-A-2-B-3-C-4-D
+                window.gameState.targetPath = ["1", "A", "2", "B", "3", "C", "4", "D"];
+            } else {
+                const seqB = sequences[mode];
+                const length = 12; 
+                const slicedB = seqB.slice(0, length);
+                const seqA = Array.from({length: length}, (_, i) => (i + 1).toString());
+                window.gameState.targetPath = [];
+                for(let i = 0; i < length; i++) {
+                    window.gameState.targetPath.push(seqA[i]);
+                    window.gameState.targetPath.push(slicedB[i]);
+                }
             }
 
             const modeDisplay = document.getElementById('mode-display');
             if (modeDisplay) {
-                const modeName = mode === 'alpha' ? '英字' : mode === 'zodiac' ? '生肖' : '十二地支';
-                const diffName = difficulty === 'basic' ? '基礎' : '顏色進階';
-                modeDisplay.innerText = `${diffName}：${modeName}`;
+                if (isTrial) {
+                    modeDisplay.innerText = `新手試玩：1-A-2-B...`;
+                } else {
+                    const modeName = mode === 'alpha' ? '英字' : mode === 'zodiac' ? '生肖' : '十二地支';
+                    const diffName = difficulty === 'basic' ? '基礎' : '進階';
+                    modeDisplay.innerText = `${diffName}：${modeName}`;
+                }
             }
             
             initBoard();
@@ -134,9 +151,9 @@
         window.openQuitModal = () => document.getElementById('quit-modal').classList.remove('hidden');
         window.closeQuitModal = () => document.getElementById('quit-modal').classList.add('hidden');
         
-        // 返回主選單但不重整網頁，保留紀錄
         window.resetToMenu = () => {
             window.gameState.isPlaying = false;
+            window.gameState.isTrial = false;
             clearInterval(window.gameState.timerInterval);
             document.getElementById('quit-modal').classList.add('hidden');
             document.getElementById('result-screen').classList.add('hidden');
@@ -170,9 +187,9 @@
             const canvasWidth = container.clientWidth;
             const canvasHeight = container.clientHeight;
             
-            let nodeSize = 64; 
-            if (canvasWidth < 640) nodeSize = 52; 
-            if (canvasWidth > 1200) nodeSize = 72; 
+            // 試玩模式圓圈稍大以方便操作
+            let nodeSize = window.gameState.isTrial ? 72 : 64; 
+            if (canvasWidth < 640) nodeSize = window.gameState.isTrial ? 60 : 52; 
             
             const minDistance = nodeSize * 1.55;
             const padding = nodeSize * 0.9;
@@ -189,8 +206,8 @@
                 node.style.fontSize = `${nodeSize * 0.45}px`;
                 node.innerText = label;
 
-                // 進階模式：加入隨機顏色干擾
-                if (window.gameState.difficulty === 'advanced') {
+                // 進階模式：加入隨機顏色干擾 (試玩模式不套用顏色)
+                if (window.gameState.difficulty === 'advanced' && !window.gameState.isTrial) {
                     const randomColor = advancedColors[Math.floor(Math.random() * advancedColors.length)];
                     node.style.backgroundColor = randomColor;
                     node.style.borderColor = 'rgba(0,0,0,0.08)';
@@ -261,15 +278,33 @@
         }
 
         function endGame() {
+            const isTrial = window.gameState.isTrial;
             window.gameState.isPlaying = false;
             clearInterval(window.gameState.timerInterval);
             const quitBtn = document.getElementById('quit-btn');
             if (quitBtn) quitBtn.classList.add('hidden');
+            
             const finalTime = document.getElementById('timer').innerText;
             saveScore(finalTime, window.gameState.errors, window.gameState.mode, window.gameState.difficulty);
+            
             document.getElementById('final-time').innerText = finalTime + 's';
             document.getElementById('final-errors').innerText = window.gameState.errors;
-            document.getElementById('result-screen').classList.remove('hidden');
+            
+            const resultScreen = document.getElementById('result-screen');
+            const resultTitle = document.getElementById('result-title');
+            const historySec = document.getElementById('history-section');
+            
+            if (isTrial) {
+                resultTitle.innerText = "試玩完成！";
+                historySec.classList.add('hidden');
+                document.getElementById('trial-finish-msg').classList.remove('hidden');
+            } else {
+                resultTitle.innerText = "測驗完成";
+                historySec.classList.remove('hidden');
+                document.getElementById('trial-finish-msg').classList.add('hidden');
+            }
+            
+            resultScreen.classList.remove('hidden');
         }
 
         function updateHistoryUI() {
@@ -311,35 +346,19 @@
         .node-error { animation: shake 0.4s; background-color: #ef4444 !important; color: white !important; }
         @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
         
-        /* 滿版畫布 */
-        .full-viewport {
-            width: 100%;
-            height: 100%;
-            background-color: #ffffff;
-            position: relative;
-        }
-
-        /* 初始畫面背景色 #789EBF */
+        .full-viewport { width: 100%; height: 100%; background-color: #ffffff; position: relative; }
         #start-screen { background-color: #789EBF; }
         
-        /* 滾動容器優化 */
         .overlay-content {
             max-height: 90vh;
             overflow-y: auto;
             scrollbar-width: none;
+            -ms-overflow-style: none;
         }
         .overlay-content::-webkit-scrollbar { display: none; }
-
-        /* 按鈕樣式統一 */
-        .menu-btn {
-            @apply w-full py-4 bg-white rounded-2xl text-xs sm:text-sm font-black transition-all flex justify-between items-center px-6 shadow-sm border-2 border-transparent;
-        }
-        .menu-btn:hover {
-            @apply border-indigo-200 shadow-md transform -translate-y-0.5;
-        }
     </style>
 </head>
-<body class="h-screen w-screen flex flex-col overflow-hidden bg-white">
+<body class="h-screen w-screen flex flex-col overflow-hidden bg-white text-slate-800">
 
     <!-- 頂部導航欄 -->
     <header class="bg-white border-b px-4 sm:px-6 py-3 sm:py-4 flex justify-between items-center z-50 shadow-sm shrink-0">
@@ -349,7 +368,7 @@
             </button>
             <div class="ml-1">
                 <h1 class="text-xs sm:text-sm font-black text-slate-800 tracking-tighter uppercase leading-none">TMT Assessment</h1>
-                <p id="mode-display" class="text-[9px] text-indigo-400 font-black uppercase tracking-[0.1em] mt-1">STANDBY</p>
+                <p id="mode-display" class="text-[9px] text-indigo-400 font-black uppercase tracking-[0.15em] mt-1">STANDBY</p>
             </div>
         </div>
         <div class="flex gap-4 sm:gap-8 items-center">
@@ -374,28 +393,45 @@
             <!-- 開始選單 -->
             <div id="start-screen" class="absolute inset-0 z-30 flex items-start sm:items-center justify-center p-4 sm:p-8 overflow-y-auto">
                 <div class="bg-white rounded-[2rem] p-6 sm:p-10 w-full max-w-sm shadow-2xl my-auto overlay-content">
-                    <div class="text-center mb-6 sm:mb-10">
-                        <div class="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-3xl flex items-center justify-center mx-auto mb-4">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="m4.93 4.93 14.14 14.14"/><path d="M2 12h20"/><path d="m4.93 19.07 14.14-14.14"/></svg>
+                    <div class="text-center mb-6 sm:mb-8">
+                        <div class="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="m4.93 4.93 14.14 14.14"/><path d="M2 12h20"/><path d="m4.93 19.07 14.14-14.14"/></svg>
                         </div>
-                        <h2 class="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight">路徑描繪測驗</h2>
-                        <p class="text-slate-400 text-[10px] mt-2 font-bold uppercase tracking-[0.3em]">Basic 24 Nodes Assessment</p>
+                        <h2 class="text-2xl font-black text-slate-800 tracking-tight leading-tight">路徑描繪測驗</h2>
+                        <p class="text-slate-400 text-[10px] mt-1 font-bold uppercase tracking-[0.2em]">Cognitive Training System</p>
                     </div>
+
+                    <!-- 試玩介紹區塊 -->
+                    <section id="trial-section" class="mb-6 bg-slate-50 p-4 rounded-2xl border-2 border-indigo-100">
+                        <div class="flex items-start gap-3 mb-3">
+                            <div class="w-8 h-8 bg-indigo-500 text-white rounded-lg flex-shrink-0 flex items-center justify-center text-xs font-bold">💡</div>
+                            <div>
+                                <h3 class="text-xs font-black text-indigo-600 uppercase">遊戲介紹</h3>
+                                <p class="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                                    本遊戲訓練大腦的「交替注意力」。參與者需依規則，在圖中<strong>交替連線兩種不同類別的項目</strong>，例如：<span class="text-indigo-600 font-bold uppercase">1-A-2-B-3-C-4-D</span>。
+                                </p>
+                            </div>
+                        </div>
+                        <button onclick="startGame('alpha', 'basic', true)" class="w-full py-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl text-xs font-black shadow-md transition-all active:scale-95 tracking-widest uppercase">
+                            試玩
+                        </button>
+                        <p id="trial-tip" class="text-[9px] text-center text-indigo-400 font-bold mt-2 animate-pulse uppercase tracking-wider">建議第一次進入請先點此試玩</p>
+                    </section>
                     
                     <div class="space-y-6">
                         <!-- 基礎版區塊 -->
                         <section>
-                            <h3 class="text-[10px] font-black text-slate-400 mb-2 uppercase tracking-tighter ml-1">基礎測試</h3>
+                            <h3 class="text-[10px] font-black text-slate-400 mb-2 uppercase tracking-tighter ml-1">基礎版本</h3>
                             <div class="grid grid-cols-1 gap-2">
-                                <button onclick="startGame('alpha', 'basic')" class="py-3 bg-slate-50 hover:bg-white text-slate-700 rounded-2xl text-[11px] font-black border-2 border-slate-100 hover:border-indigo-200 transition-all flex justify-between items-center px-6">
+                                <button onclick="startGame('alpha', 'basic')" class="py-3 bg-white hover:bg-indigo-50 text-slate-700 rounded-2xl text-[11px] font-black border-2 border-slate-100 hover:border-indigo-200 transition-all flex justify-between items-center px-6">
                                     <span>數字 + 英字</span>
                                     <span class="text-indigo-500">➔</span>
                                 </button>
-                                <button onclick="startGame('zodiac', 'basic')" class="py-3 bg-slate-50 hover:bg-white text-slate-700 rounded-2xl text-[11px] font-black border-2 border-slate-100 hover:border-indigo-200 transition-all flex justify-between items-center px-6">
+                                <button onclick="startGame('zodiac', 'basic')" class="py-3 bg-white hover:bg-indigo-50 text-slate-700 rounded-2xl text-[11px] font-black border-2 border-slate-100 hover:border-indigo-200 transition-all flex justify-between items-center px-6">
                                     <span>數字 + 生肖</span>
                                     <span class="text-indigo-500">➔</span>
                                 </button>
-                                <button onclick="startGame('stem', 'basic')" class="py-3 bg-slate-50 hover:bg-white text-slate-700 rounded-2xl text-[11px] font-black border-2 border-slate-100 hover:border-indigo-200 transition-all flex justify-between items-center px-6">
+                                <button onclick="startGame('stem', 'basic')" class="py-3 bg-white hover:bg-indigo-50 text-slate-700 rounded-2xl text-[11px] font-black border-2 border-slate-100 hover:border-indigo-200 transition-all flex justify-between items-center px-6">
                                     <span>數字 + 十二地支</span>
                                     <span class="text-indigo-500">➔</span>
                                 </button>
@@ -404,7 +440,7 @@
 
                         <!-- 進階版區塊 -->
                         <section>
-                            <h3 class="text-[10px] font-black text-slate-400 mb-2 uppercase tracking-tighter ml-1">進階測試 (顏色干擾)</h3>
+                            <h3 class="text-[10px] font-black text-slate-400 mb-2 uppercase tracking-tighter ml-1">進階版本</h3>
                             <div class="grid grid-cols-1 gap-2">
                                 <button onclick="startGame('alpha', 'advanced')" class="py-3 bg-white text-slate-700 rounded-2xl text-[11px] font-black border-2 border-indigo-100 hover:border-indigo-300 transition-all flex justify-between items-center px-6 shadow-sm">
                                     <span>數字 + 英字 (顏色版)</span>
@@ -433,7 +469,7 @@
             </div>
 
             <!-- 結束確認 -->
-            <div id="quit-modal" class="hidden absolute inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-6">
+            <div id="quit-modal" class="hidden absolute inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-6 text-slate-800">
                 <div class="bg-white rounded-[2rem] p-8 max-w-xs w-full shadow-2xl text-center">
                     <div class="w-12 h-12 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
@@ -453,12 +489,12 @@
 
             <!-- 結果畫面 -->
             <div id="result-screen" class="hidden absolute inset-0 bg-white z-40 flex items-start sm:items-center justify-center p-4 sm:p-8 text-center overflow-y-auto">
-                <div class="w-full max-w-sm my-auto overlay-content p-2">
+                <div class="w-full max-w-sm my-auto overlay-content p-2 text-slate-800">
                     <div class="mb-6 sm:mb-10">
                         <div class="w-16 h-16 sm:w-20 sm:h-20 bg-green-50 text-green-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
                             <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
                         </div>
-                        <h2 class="text-3xl font-black text-slate-800 tracking-tighter uppercase">測驗完成</h2>
+                        <h2 id="result-title" class="text-3xl font-black text-slate-800 tracking-tighter uppercase">測驗完成</h2>
                     </div>
                     
                     <div class="grid grid-cols-2 gap-3 mb-6">
@@ -472,14 +508,22 @@
                         </div>
                     </div>
 
-                    <div class="bg-slate-50 rounded-3xl p-5 mb-6 text-left border border-slate-100">
+                    <div id="history-section" class="bg-slate-50 rounded-3xl p-5 mb-6 text-left border border-slate-100">
                         <h3 class="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-3">平均紀錄 (相同模式)</h3>
                         <p id="avg-time" class="text-xl font-black text-slate-800 leading-none mb-4">--</p>
                         <div id="history-list" class="space-y-1"></div>
                     </div>
 
+                    <!-- 試玩結束特有說明 -->
+                    <div id="trial-finish-msg" class="hidden mb-8 bg-indigo-50 p-5 rounded-3xl border border-indigo-100 text-left">
+                        <h4 class="text-xs font-black text-indigo-600 mb-2">太棒了！</h4>
+                        <p class="text-[11px] text-slate-600 leading-relaxed font-bold">
+                            你已經掌握了連線規則。正式測試將會有 24 個點，且可以挑戰顏色干擾版，準備好開始正式訓練了嗎？
+                        </p>
+                    </div>
+
                     <button onclick="window.resetToMenu()" class="w-full py-4 bg-slate-900 hover:bg-black text-white rounded-2xl font-black text-xs transition-all shadow-xl tracking-widest uppercase">
-                        RESTART
+                        RESTART / BACK
                     </button>
                 </div>
             </div>
